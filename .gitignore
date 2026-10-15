@@ -24,3 +24,5 @@ tunnel.log
 # 系统
 .DS_Store
 Thumbs.db
+serveo.log
+serveo.err
