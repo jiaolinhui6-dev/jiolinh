@@ -37,9 +37,12 @@ from sentinel import ai_helper
 from sentinel.page import PAGE_HTML
 from sentinel.paste_import import parse_smart_paste, to_standard_line
 
-# 监听地址：默认只本机。放到公网时用环境变量 HOST=0.0.0.0（推荐配隧道）。
-HOST = os.environ.get("HOST", "127.0.0.1").strip() or "127.0.0.1"
-PORT = int(os.environ.get("PORT", "8000") or "8000")
+# 监听地址：本机默认只绑 127.0.0.1。
+# 云平台（Render/Railway/Fly 等）会注入 PORT 环境变量，此时默认绑 0.0.0.0，
+# 否则平台扫不到端口、部署会失败。也可随时用 HOST 环境变量显式覆盖。
+_port_env = os.environ.get("PORT")
+HOST = os.environ.get("HOST", "").strip() or ("0.0.0.0" if _port_env else "127.0.0.1")
+PORT = int(_port_env or "8000")
 MAX_BODY = 1 * 1024 * 1024  # 1MB 请求上限
 DEMO_PATH = "data/demo_chat.txt"
 SAMPLE_PATH = "data/sample_chat.txt"
