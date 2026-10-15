@@ -1,0 +1,32 @@
+# Render 部署蓝图（Blueprint）
+# 用法：把本仓库推到 GitHub 后，在 Render 里 New -> Blueprint，选中本仓库即可。
+# 文档：https://render.com/docs/blueprint-spec
+services:
+  - type: web
+    name: deadline-sentinel
+    runtime: python
+    plan: free
+    buildCommand: "pip install -r requirements.txt"
+    startCommand: "python webapp.py"
+    healthCheckPath: /
+    envVars:
+      - key: HOST
+        value: 0.0.0.0
+      - key: PYTHON_VERSION
+        value: 3.11.11
+      - key: PYTHONIOENCODING
+        value: utf-8
+      # 以下三项按需在 Render 后台填写（不填则自动进入离线模式，功能照常）
+      # - key: BASE_URL
+      #   sync: false
+      # - key: API_KEY
+      #   sync: false
+      # - key: MODEL
+      #   sync: false
+      # 官方演示 API（可选，供访客体验）
+      # - key: DEMO_BASE_URL
+      #   sync: false
+      # - key: DEMO_API_KEY
+      #   sync: false
+      # - key: DEMO_MODEL
+      #   sync: false
