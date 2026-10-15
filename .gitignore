@@ -19,10 +19,10 @@ export_*
 
 # 隧道 / 上线产物
 tunnel.log
+serveo.log
+serveo.err
 当前公网地址.txt
 
 # 系统
 .DS_Store
 Thumbs.db
-serveo.log
-serveo.err
