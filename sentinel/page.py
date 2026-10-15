@@ -25,7 +25,8 @@ PAGE_HTML = r"""<!DOCTYPE html>
            z-index:-2;pointer-events:none}
   #bgmask{position:fixed;inset:0;z-index:-1;pointer-events:none;
           background:linear-gradient(180deg,rgba(6,10,20,.34),rgba(6,10,20,.58))}
-  @media(max-width:640px){#bgvideo{display:none}}
+  /* 手机端背景照常显示，遮罩略加深以保证正文可读 */
+  @media(max-width:640px){#bgmask{background:linear-gradient(180deg,rgba(6,10,20,.55),rgba(6,10,20,.75))}}
   header{background:linear-gradient(135deg,rgba(30,58,138,.86),rgba(37,99,235,.80));color:#fff;padding:22px 28px}
   header h1{margin:0;font-size:22px;font-weight:700;letter-spacing:.5px}
   header p{margin:6px 0 0;font-size:13px;opacity:.9}
