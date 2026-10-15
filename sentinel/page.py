@@ -19,14 +19,21 @@ PAGE_HTML = r"""<!DOCTYPE html>
   }
   *{box-sizing:border-box}
   body{margin:0;font-family:"Microsoft YaHei","PingFang SC",system-ui,sans-serif;
-       color:var(--ink);background:#f1f5f9;line-height:1.55}
-  header{background:linear-gradient(135deg,#1e3a8a,#2563eb);color:#fff;padding:22px 28px}
+       color:var(--ink);background:#0b1220;line-height:1.55}
+  /* 视频背景层（fixed 铺满，纯装饰、不吃鼠标事件） */
+  #bgvideo{position:fixed;inset:0;width:100%;height:100%;object-fit:cover;
+           z-index:-2;pointer-events:none}
+  #bgmask{position:fixed;inset:0;z-index:-1;pointer-events:none;
+          background:linear-gradient(180deg,rgba(6,10,20,.34),rgba(6,10,20,.58))}
+  @media(max-width:640px){#bgvideo{display:none}}
+  header{background:linear-gradient(135deg,rgba(30,58,138,.86),rgba(37,99,235,.80));color:#fff;padding:22px 28px}
   header h1{margin:0;font-size:22px;font-weight:700;letter-spacing:.5px}
   header p{margin:6px 0 0;font-size:13px;opacity:.9}
   .wrap{max-width:1180px;margin:0 auto;padding:20px 24px 60px}
   .grid{display:grid;grid-template-columns:minmax(360px,1fr) minmax(420px,1.15fr);gap:20px;align-items:start}
-  .panel{background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:16px 18px;
-         box-shadow:0 1px 2px rgba(15,23,42,.06)}
+  .panel{background:rgba(255,255,255,.94);backdrop-filter:blur(6px);
+         border:1px solid var(--line);border-radius:12px;padding:16px 18px;
+         box-shadow:0 2px 10px rgba(2,6,23,.18)}
   .panel h2{margin:0 0 10px;font-size:15px;font-weight:700;color:#0f172a}
   .hint{color:var(--muted);font-size:12.5px}
   textarea{width:100%;height:210px;resize:vertical;padding:10px;border:1px solid var(--line);
@@ -114,6 +121,10 @@ PAGE_HTML = r"""<!DOCTYPE html>
 </style>
 </head>
 <body>
+<video id="bgvideo" autoplay muted loop playsinline preload="auto" poster="">
+  <source src="/assets/bg.mp4" type="video/mp4">
+</video>
+<div id="bgmask"></div>
 <header>
   <h1>📌 课程 Deadline 哨兵 <span class="ver">Agent 版</span></h1>
   <p>Agent 编排 · 工具调用 · 规则优先 · AI 可选 · 可解释</p>

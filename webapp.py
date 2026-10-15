@@ -188,6 +188,44 @@ class Handler(BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(data)
 
+    # ---------- 静态资源 ----------
+    STATIC_TYPES = {
+        ".mp4": "video/mp4",
+        ".webm": "video/webm",
+        ".jpg": "image/jpeg",
+        ".jpeg": "image/jpeg",
+        ".png": "image/png",
+        ".svg": "image/svg+xml",
+        ".css": "text/css; charset=utf-8",
+        ".js": "application/javascript; charset=utf-8",
+    }
+    ASSETS_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "assets")
+
+    def _serve_static(self, path: str):
+        """只服务 assets/ 下的文件；做路径穿越防护。"""
+        rel = urllib.parse.unquote(path[len("/assets/"):])
+        target = os.path.normpath(os.path.join(self.ASSETS_DIR, rel))
+        if not target.startswith(self.ASSETS_DIR + os.sep):
+            self._send("Not Found", 404, "text/plain; charset=utf-8")
+            return
+        if not os.path.isfile(target):
+            self._send("Not Found", 404, "text/plain; charset=utf-8")
+            return
+        ext = os.path.splitext(target)[1].lower()
+        ctype = self.STATIC_TYPES.get(ext, "application/octet-stream")
+        try:
+            with open(target, "rb") as f:
+                data = f.read()
+        except OSError:
+            self._send("Read Error", 500, "text/plain; charset=utf-8")
+            return
+        self.send_response(200)
+        self.send_header("Content-Type", ctype)
+        self.send_header("Content-Length", str(len(data)))
+        self.send_header("Cache-Control", "public, max-age=3600")
+        self.end_headers()
+        self.wfile.write(data)
+
     def _client_ip(self) -> str:
         """取客户端 IP：优先 X-Forwarded-For（隧道/反代），否则用套接字地址。"""
         xff = self.headers.get("X-Forwarded-For", "")
@@ -215,6 +253,8 @@ class Handler(BaseHTTPRequestHandler):
         path = urllib.parse.urlparse(self.path).path
         if path == "/":
             self._send(PAGE_HTML)
+        elif path.startswith("/assets/"):
+            self._serve_static(path)
         elif path == "/api/demo":
             self._json({"text": load_text_file(SAMPLE_PATH) or load_text_file(DEMO_PATH)})
         elif path == "/api/agent_config":
