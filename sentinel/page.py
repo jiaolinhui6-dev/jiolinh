@@ -386,7 +386,21 @@ function updateModeBar(){
   const map = {offline:'离线模式（仅规则）', demo:'项目演示 API', custom:'我的 API'};
   $('modeBar').textContent = '当前：' + (map[m]||m);
 }
-document.querySelectorAll('input[name=aimode]').forEach(el=>el.addEventListener('change', updateModeBar));
+document.querySelectorAll('input[name=aimode]').forEach(el=>el.addEventListener('change', ()=>onMainModeChange(el.value)));
+// 主面板选「我的 API / 演示 API」时，直接打开设置弹窗并展开对应输入框，
+// 避免用户误以为"点了没反应、无处可填"。
+function onMainModeChange(m){
+  updateModeBar();
+  if(m==='custom' || m==='demo') openSettings(m);
+}
+function openSettings(m){
+  const el = document.querySelector('input[name=smode][value="'+m+'"]');
+  if(el) el.checked = true;
+  $('customPane').style.display = (m==='custom')?'block':'none';
+  const d = $('settingsDlg');
+  if(!d.open) d.showModal();
+  loadCfg().then(()=>renderCfg());
+}
 
 async function analyze(){
   const text = $('input').value;
@@ -521,7 +535,10 @@ function renderCfg(){
   if(lc.api_key) parts.push('我的 API 已配置（仅本浏览器）：'+esc(maskKey(lc.api_key)));
   $('aiHint').textContent = parts.length ? parts.join('｜') : '未配置任何 API；离线模式（规则）可正常使用。';
 }
-$('btnSettings').onclick = async ()=>{ await loadCfg(); renderCfg(); $('settingsDlg').showModal(); };
+$('btnSettings').onclick = async ()=>{
+  const m = currentMode();
+  openSettings(m==='demo' || m==='custom' ? m : 'offline');
+};
 $('cfgClose').onclick = ()=>$('settingsDlg').close();
 document.querySelectorAll('input[name=smode]').forEach(el=>el.addEventListener('change', ()=>{
   const m = document.querySelector('input[name=smode]:checked').value;
