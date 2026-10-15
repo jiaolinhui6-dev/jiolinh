@@ -1,0 +1,13 @@
+# 课程 Deadline 哨兵 依赖清单
+#
+# 必装（Excel 导出功能需要）：
+openpyxl>=3.0.0        # 生成 XLSX 文件（网页「导出 Excel（推荐）」按钮、命令行导出）
+
+# 其余功能均使用 Python 标准库，无需额外安装：
+#   * 网页应用：http.server
+#   * AI 增强（可选）：urllib.request（无需 requests / openai SDK）
+#
+# 说明：
+#   * 如果不安装 openpyxl，程序仍可正常分析、展示、导出 CSV/JSON，
+#     只是「导出 Excel」会返回提示，建议改用 CSV。
+#   * 安装命令：pip install -r requirements.txt
