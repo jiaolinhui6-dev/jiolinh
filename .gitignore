@@ -20,3 +20,6 @@ export_*
 # 系统
 .DS_Store
 Thumbs.db
+# 隧道/上线产物
+tunnel.log
+当前公网地址.txt
