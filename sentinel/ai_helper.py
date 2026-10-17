@@ -11,6 +11,7 @@
 
 import json
 import os
+import re
 import urllib.error
 import urllib.request
 from datetime import datetime, timedelta
@@ -139,11 +140,15 @@ PROMPT_TEMPLATE = """你是一个中文课程待办解析助手。下面是从�
 参考当前时间：{now}
 
 严格要求：
-1. 只输出 JSON，不要任何解释文字。
+1. 只输出 JSON 数组，**不要** Markdown 代码块、不要任何解释文字。
 2. 结构：[{{"id": "<消息id>", "due": "YYYY-MM-DD HH:MM 或 null", "reason": "简述依据"}}]
 3. 无法确定时必须给 null，不要编造。
 4. 如果原文明确写了年份，照抄；只写月日的，按"离参考当前时间最近的未来时间"处理。
 5. 不要修改、复述原文内容。
+6. id 必须原样照抄消息列表里给出的 id，不要自己造。
+
+示例输出（仅作格式参考）：
+[{{"id": "示例id", "due": "2026-10-21 23:59", "reason": "原文提到下周三交"}}]
 
 消息列表：
 {messages}
@@ -176,14 +181,73 @@ def _build_prompt(picked: list, now: datetime, max_chars: int) -> str:
     return PROMPT_TEMPLATE.format(now=now.strftime("%Y-%m-%d %H:%M"), messages=messages)
 
 
+def _extract_json(content: str):
+    """从模型回复里尽力抽出 JSON。
+
+    实测中模型经常不按"只输出 JSON"来：可能包 ```json 代码块、前后带解释文字、
+    或用 {"result": [...]} 之类的外层对象。这里做几层容错，仍然只接受能解析出来的结果。
+
+    返回解析后的对象；全部失败时抛 AIError("invalid")。
+    """
+    if content is None:
+        raise AIError("invalid", "AI 返回内容为空，已忽略。")
+    text = str(content).strip()
+    if not text:
+        raise AIError("invalid", "AI 返回内容为空，已忽略。")
+
+    # 1) 直接解析
+    try:
+        return json.loads(text)
+    except json.JSONDecodeError:
+        pass
+
+    # 2) 去掉 Markdown 代码围栏（```json ... ``` / ``` ... ```）
+    fence = re.search(r"```[a-zA-Z]*\s*(.+?)```", text, re.S)
+    if fence:
+        inner = fence.group(1).strip()
+        try:
+            return json.loads(inner)
+        except json.JSONDecodeError:
+            text = inner  # 继续往后面尝试从这段里截取
+
+    # 3) 截取第一个 [ ... ] 或 { ... } 片段（模型常在 JSON 前后加解释）
+    for opener, closer in (("[", "]"), ("{", "}")):
+        start = text.find(opener)
+        end = text.rfind(closer)
+        if start != -1 and end > start:
+            snippet = text[start:end + 1]
+            try:
+                return json.loads(snippet)
+            except json.JSONDecodeError:
+                continue
+
+    raise AIError("invalid", "AI 返回内容不是合法 JSON，已忽略。")
+
+
+def _coerce_list(data):
+    """把常见的"被包了一层"的结构摊平成列表。
+
+    支持：直接的 list、{"result": [...]}、{"suggestions": [...]}、{"data": [...]}、
+    以及只有单个对象 {@...} 的情况。找不到列表时返回 None。
+    """
+    if isinstance(data, list):
+        return data
+    if isinstance(data, dict):
+        for key in ("result", "results", "suggestions", "data", "items", "list"):
+            value = data.get(key)
+            if isinstance(value, list):
+                return value
+        # 单个建议对象（含 id）
+        if "id" in data:
+            return [data]
+    return None
+
+
 def _validate_suggestions(content: str, picked: list, now: datetime) -> list:
     """校验模型返回：必须是合法 JSON、id 必须来自本次输入、日期必须可解析且在合理范围。"""
-    try:
-        data = json.loads(content)
-    except json.JSONDecodeError:
-        raise AIError("invalid", "AI 返回内容不是合法 JSON，已忽略。")
-
-    if not isinstance(data, list):
+    data = _extract_json(content)
+    data = _coerce_list(data)
+    if data is None:
         raise AIError("invalid", "AI 返回结构不是列表，已忽略。")
 
     valid_ids = {t["id"] for t in picked}
@@ -272,7 +336,7 @@ def suggest_for_tasks(
     payload = {
         "model": cfg["model"],
         "messages": [
-            {"role": "system", "content": "你是严谨的中文课程待办解析助手，只输出 JSON。"},
+            {"role": "system", "content": "你是严谨的中文课程待办解析助手。只输出 JSON 数组，不加代码块、不加解释。"},
             {"role": "user", "content": prompt},
         ],
         "temperature": 0,

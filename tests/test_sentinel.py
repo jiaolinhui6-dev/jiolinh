@@ -501,6 +501,63 @@ class TestUploadInspect(unittest.TestCase):
         self.assertEqual(r["kind"], "empty")
 
 
+class TestAiJsonExtraction(unittest.TestCase):
+    """AI 返回经常不是"干净的 JSON"：代码块 / 解释文字 / 外层包裹。
+    这些都必须能被容错解析；非法内容仍要丢弃。"""
+
+    NOW = datetime(2026, 10, 17, 10, 0)
+
+    def _tasks(self):
+        return [{"id": "t1", "chat": "高数", "text": "下周交作业",
+                 "msg_time": datetime(2026, 10, 16, 9, 0),
+                 "due": None, "superseded": False, "excluded": False}]
+
+    def _run(self, content):
+        from sentinel import ai_helper
+        def transport(payload, cfg, timeout, _c=content):
+            return {"choices": [{"message": {"content": _c}}]}
+        return ai_helper.suggest_for_tasks(
+            self._tasks(), self.NOW, transport=transport,
+            env={"BASE_URL": "http://x", "API_KEY": "k", "MODEL": "m"})
+
+    def test_plain_json(self):
+        sug, meta = self._run('[{"id":"t1","due":"2026-10-21 23:59","reason":"下周三"}]')
+        self.assertTrue(meta["used"]); self.assertEqual(len(sug), 1)
+
+    def test_json_in_code_fence(self):
+        sug, meta = self._run('```json\n[{"id":"t1","due":"2026-10-21 23:59","reason":"x"}]\n```')
+        self.assertTrue(meta["used"]); self.assertEqual(len(sug), 1)
+
+    def test_fence_without_language(self):
+        sug, meta = self._run('```\n[{"id":"t1","due":"2026-10-21 23:59","reason":"x"}]\n```')
+        self.assertTrue(meta["used"]); self.assertEqual(len(sug), 1)
+
+    def test_with_surrounding_prose(self):
+        sug, meta = self._run('好的，结果如下：\n[{"id":"t1","due":"2026-10-21 23:59","reason":"x"}]\n以上。')
+        self.assertTrue(meta["used"]); self.assertEqual(len(sug), 1)
+
+    def test_wrapped_in_object(self):
+        sug, meta = self._run('{"suggestions":[{"id":"t1","due":"2026-10-21 23:59","reason":"x"}]}')
+        self.assertTrue(meta["used"]); self.assertEqual(len(sug), 1)
+
+    def test_bogus_id_dropped(self):
+        sug, meta = self._run('[{"id":"zzz","due":"2026-10-21 23:59","reason":"x"}]')
+        self.assertEqual(sug, [])
+
+    def test_unparseable_date_dropped(self):
+        sug, meta = self._run('[{"id":"t1","due":"下周三","reason":"x"}]')
+        self.assertEqual(sug, [])
+
+    def test_null_due_kept_as_none(self):
+        sug, meta = self._run('[{"id":"t1","due":null,"reason":"无时间"}]')
+        self.assertEqual(len(sug), 1); self.assertIsNone(sug[0]["due"])
+
+    def test_truly_invalid_still_rejected(self):
+        sug, meta = self._run('抱歉，我无法完成这个请求。')
+        self.assertEqual(sug, [])
+        self.assertIn("不是合法 JSON", meta["error"])
+
+
 class TestSchedule(unittest.TestCase):
     """结构化时间表：按周一到周日归组 + 分区。"""
 
