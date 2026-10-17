@@ -440,6 +440,84 @@ class TestSmartPaste(unittest.TestCase):
         self.assertEqual(tasks[0]["due"].day, 25)
 
 
+class TestQQTranscript(unittest.TestCase):
+    """整段 QQ 聊天记录：一次粘贴，自动拆成多条。"""
+
+    NOW = datetime(2026, 10, 17, 10, 0)
+
+    QQ_COPY = """(ᗜ ˰ ᗜ)亓兀元丌: 09-28 08:12:04
+        各位同学，提交时间：9月30号周三16:30线代课后。
+
+长缘已尽，故人依旧: 10-13 17:00:47
+线代作业 P49 练习2.2 3；4；6；7；10 明天上课的第二节课后上交
+"""
+
+    QQ_EXPORT = """消息记录（此消息记录为文本格式，不支持重新导入）
+================================================================
+消息分组:我加入的群聊
+================================================================
+
+2026-10-14 09:12:19 (助教-李)
+实验三报告下周日晚上12点前交
+
+2026-10-16 19:01:55 (助教-李)
+作业练习2.4：1，4
+"""
+
+    def test_copy_format_split_into_messages(self):
+        from sentinel.paste_import import parse_smart_paste_batch, to_standard_line
+        lines, notes = parse_smart_paste_batch(self.QQ_COPY, default_chat="线代群", now=self.NOW)
+        self.assertEqual(len(lines), 2)
+        self.assertIn("(ᗜ ˰ ᗜ)亓兀元丌", lines[0])
+        self.assertIn("2026-09-28 08:12", lines[0])
+        self.assertIn("长缘已尽，故人依旧", lines[1])
+        self.assertIn("2026-10-13 17:00", lines[1])
+        self.assertIn("2", notes[0])   # 提示里说明识别到 2 条
+
+    def test_export_format_skips_junk_lines(self):
+        from sentinel.paste_import import parse_smart_paste_batch
+        lines, notes = parse_smart_paste_batch(self.QQ_EXPORT, default_chat="数据结构", now=self.NOW)
+        self.assertEqual(len(lines), 2)
+        self.assertNotIn("消息分组", "\n".join(lines))
+        self.assertNotIn("====", "\n".join(lines))
+        self.assertIn("助教-李", lines[0])
+        self.assertIn("2026-10-14 09:12", lines[0])
+
+    def test_year_inferred_for_past_month_day(self):
+        from sentinel.paste_import import parse_qq_transcript
+        # 现在是 2026-10，记录写 09-28 -> 2026；写 12-01（还没到）-> 2025
+        msgs = parse_qq_transcript("A: 09-28 08:12:04\n正文1\n\nB: 12-01 08:00:00\n正文2",
+                                   chat="群", now=self.NOW)
+        self.assertEqual(msgs[0]["msg_time"].year, 2026)
+        self.assertEqual(msgs[1]["msg_time"].year, 2025)
+
+    def test_single_message_still_works(self):
+        from sentinel.paste_import import parse_smart_paste_batch
+        lines, notes = parse_smart_paste_batch("实验三报告下周日晚上12点前交", now=self.NOW)
+        self.assertEqual(len(lines), 1)
+        self.assertIn("实验三报告下周日晚上12点前交", lines[0])
+
+    def test_standard_format_returned_as_is(self):
+        from sentinel.paste_import import parse_smart_paste_batch
+        std = "2026-10-14 09:12 | 助教-李 | 数据结构 | 实验三报告下周日交"
+        lines, notes = parse_smart_paste_batch(std, now=self.NOW)
+        self.assertEqual(lines, [std])
+
+    def test_multiline_body_folded_to_one_line(self):
+        from sentinel.paste_import import to_standard_line
+        line = to_standard_line({"msg_time": self.NOW, "sender": "A", "chat": "B",
+                                 "text": "第一行\n第二行\n第三行"})
+        self.assertNotIn("\n", line)
+        self.assertIn("第一行 第二行 第三行", line)
+
+    def test_time_word_not_treated_as_sender(self):
+        from sentinel.paste_import import parse_qq_transcript
+        # "提交时间: 9月30号" 这种不能被当成消息头
+        msgs = parse_qq_transcript("A: 09-28 08:12:04\n提交时间: 9月30号周三16:30", chat="群", now=self.NOW)
+        self.assertEqual(len(msgs), 1)
+        self.assertIn("提交时间", msgs[0]["text"])
+
+
 class TestSmartPasteApi(unittest.TestCase):
     """智能粘贴的分析流程（不启服务）。"""
 

@@ -35,7 +35,7 @@ from sentinel import api_config
 from sentinel import export as exporter
 from sentinel import ai_helper
 from sentinel.page import PAGE_HTML
-from sentinel.paste_import import parse_smart_paste, to_standard_line
+from sentinel.paste_import import parse_smart_paste_batch, to_standard_line
 
 # 监听地址：本机默认只绑 127.0.0.1。
 # 云平台（Render/Railway/Fly 等）会注入 PORT 环境变量，此时默认绑 0.0.0.0，
@@ -336,17 +336,17 @@ class Handler(BaseHTTPRequestHandler):
                 return
             sender = str(body.get("sender", "") or "").strip() or "老师"
             chat = str(body.get("chat", "") or "").strip() or "我的课程群"
-            msg, notes = parse_smart_paste(raw, default_sender=sender, default_chat=chat)
-            if msg is None:
+            lines, notes = parse_smart_paste_batch(raw, default_sender=sender, default_chat=chat)
+            if not lines:
                 self._json({"ok": False, "error": "；".join(notes) or "无法识别这段内容。"}, 400)
                 return
             self._json({
                 "ok": True,
-                "standard_line": to_standard_line(msg),
-                "sender": msg["sender"],
-                "chat": msg["chat"],
-                "msg_time": msg["msg_time"].strftime("%Y-%m-%d %H:%M"),
-                "text": msg["text"],
+                # standard_line 保留：单条时就是那一行，多条时是换行拼接
+                "standard_line": "\n".join(lines),
+                "lines": lines,
+                "count": len(lines),
+                "chat": chat,
                 "notes": notes,
             })
         elif path == "/api/export":

@@ -139,9 +139,9 @@ PAGE_HTML = r"""<!DOCTYPE html>
 
       <!-- 智能粘贴：最省事的用法 -->
       <div class="smart">
-        <div class="smart-title">⚡ 懒人用法：直接把老师发的消息贴进来</div>
-        <p class="hint">不用管格式，粘贴后自动补上「时间 / 发送人 / 群名」。</p>
-        <textarea id="pasteInput" placeholder="实验三报告下周日晚上12点前交，迟交扣20%"></textarea>
+        <div class="smart-title">⚡ 懒人用法：把整段 QQ 聊天记录贴进来</div>
+        <p class="hint">支持 QQ 里直接复制的「昵称: 09-28 08:12:04」和导出 txt 的「2026-10-14 09:12:19 (助教-李)」：粘贴后自动拆成多条，补上「时间 / 发送人 / 群名」。</p>
+        <textarea id="pasteInput" placeholder="(ᗜ ˰ ᗜ)亓兀元丌: 09-28 08:12:04&#10;提交时间：9月30号周三16:30线代课后"></textarea>
         <div class="row">
           <label class="mini">发送人 <input id="pasteSender" value="老师" placeholder="老师"></label>
           <label class="mini">群名 <input id="pasteChat" value="我的课程群" placeholder="我的课程群"></label>
@@ -347,13 +347,15 @@ async function smartPaste(){
       body: JSON.stringify({text: raw, sender: $('pasteSender').value, chat: $('pasteChat').value})});
     const d = await r.json();
     if(!d.ok){ $('pasteNotes').innerHTML='<div class="notice err">'+esc(d.error)+'</div>'; return; }
-    // 把补全后的标准行追加进主输入框
+    // 把补全后的标准行追加进主输入框（支持一次识别多条）
+    const lines = d.lines || [d.standard_line];
     const cur = $('input').value.trim();
-    $('input').value = (cur ? cur + '\n' : '') + d.standard_line;
-    $('pasteNotes').innerHTML = '<div class="notice info">已加入：'+esc(d.standard_line)+
+    $('input').value = (cur ? cur + '\n' : '') + lines.join('\n');
+    $('pasteNotes').innerHTML = '<div class="notice info">已加入 '+lines.length+' 条：<br>'+
+      lines.map(esc).join('<br>')+
       (d.notes && d.notes.length ? '<br>'+d.notes.map(esc).join('<br>') : '')+'</div>';
     $('pasteInput').value = '';
-    toast('已识别并加入，点「开始分析」查看');
+    toast('已识别 '+lines.length+' 条，点「开始分析」查看');
   }catch(e){ toast('识别失败：'+(e.message||e)); }
 }
 $('btnSmartPaste').onclick = smartPaste;
