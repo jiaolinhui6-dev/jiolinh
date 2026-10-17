@@ -11,6 +11,7 @@ from datetime import datetime
 
 from sentinel.read_chat import parse_lines
 from sentinel.tasks import build_tasks, summarize
+from sentinel.schedule import build_schedule
 from sentinel import uncertainty
 from sentinel import ai_helper
 from sentinel import api_config
@@ -177,6 +178,26 @@ def _offline_meta(mode):
 
 
 def _result(now, tasks, problems, ai_meta, trace, scan) -> dict:
+    """统一的返回结构。
+
+    schedule 是"结构化时间表"，供网页的时间表视图和导出使用；
+    这里直接用序列化过的 task，保证 JSON 可传输（datetime -> 字符串）。
+    """
     return {"ok": True, "now": now.strftime("%Y-%m-%d %H:%M"),
             "tasks": [serialize_task(t) for t in tasks], "summary": summarize(tasks),
+            "schedule": _serialize_schedule(build_schedule(tasks, now=now)),
             "problems": problems, "ai": ai_meta, "trace": trace, "uncertain": scan}
+
+
+def _serialize_schedule(schedule: dict) -> dict:
+    """时间表里的 items 含 datetime，转成 JSON 安全的 task 结构。"""
+    out = dict(schedule)
+    out["days"] = [
+        {**d, "items": [serialize_task(t) for t in d.get("items", [])]}
+        for d in schedule.get("days", [])
+    ]
+    out["buckets"] = [
+        {**b, "items": [serialize_task(t) for t in b.get("items", [])]}
+        for b in schedule.get("buckets", [])
+    ]
+    return out

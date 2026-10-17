@@ -36,6 +36,8 @@ from sentinel import export as exporter
 from sentinel import ai_helper
 from sentinel.page import PAGE_HTML
 from sentinel.paste_import import parse_smart_paste_batch, to_standard_line
+from sentinel.upload_inspect import inspect_upload
+from sentinel.schedule import build_schedule
 
 # 监听地址：本机默认只绑 127.0.0.1。
 # 云平台（Render/Railway/Fly 等）会注入 PORT 环境变量，此时默认绑 0.0.0.0，
@@ -44,6 +46,7 @@ _port_env = os.environ.get("PORT")
 HOST = os.environ.get("HOST", "").strip() or ("0.0.0.0" if _port_env else "127.0.0.1")
 PORT = int(_port_env or "8000")
 MAX_BODY = 1 * 1024 * 1024  # 1MB 请求上限
+MAX_UPLOAD_BYTES = 4 * 1024 * 1024  # 前端上传文件上限 4MB
 DEMO_PATH = "data/demo_chat.txt"
 SAMPLE_PATH = "data/sample_chat.txt"
 MAX_AI_CALLS = 5            # 单次分析最多发给模型的候选条数上限
@@ -123,6 +126,7 @@ def analyze_text(text: str, use_ai: bool, now: datetime | None = None) -> dict:
         "now": now.strftime("%Y-%m-%d %H:%M"),
         "tasks": [serialize_task(t) for t in tasks],
         "summary": summarize(tasks),
+        "schedule": serialize_schedule(build_schedule(tasks, now=now)),
         "problems": problems,
         "ai": ai_meta,
     }
@@ -145,6 +149,24 @@ def apply_ai_suggestions(tasks: list, suggestions: list, now: datetime) -> None:
         t["ambiguous"] = True
         t["origin"] = "ai"
         t["needs_confirm"] = True
+
+
+def serialize_schedule(schedule: dict) -> dict:
+    """把时间表里的任务项转成 JSON 可序列化结构（datetime -> 字符串）。
+
+    build_schedule 返回的 items 是原始 task dict（含 datetime），
+    直接塞进 JSON 响应会报 "not JSON serializable"，所以统一走 serialize_task。
+    """
+    out = dict(schedule)
+    out["days"] = [
+        {**d, "items": [serialize_task(t) for t in d.get("items", [])]}
+        for d in schedule.get("days", [])
+    ]
+    out["buckets"] = [
+        {**b, "items": [serialize_task(t) for t in b.get("items", [])]}
+        for b in schedule.get("buckets", [])
+    ]
+    return out
 
 
 def serialize_task(t: dict) -> dict:
@@ -236,11 +258,11 @@ class Handler(BaseHTTPRequestHandler):
     def _json(self, obj: dict, status: int = 200):
         self._send(json.dumps(obj, ensure_ascii=False), status, "application/json; charset=utf-8")
 
-    def _read_body(self) -> dict | None:
+    def _read_body(self, limit: int | None = None) -> dict | None:
         length = int(self.headers.get("Content-Length", 0) or 0)
         if length <= 0:
             return {}
-        if length > MAX_BODY:
+        if length > (limit or MAX_BODY):
             return None
         raw = self.rfile.read(length).decode("utf-8", "replace")
         try:
@@ -272,9 +294,11 @@ class Handler(BaseHTTPRequestHandler):
 
     def do_POST(self):
         path = urllib.parse.urlparse(self.path).path
-        body = self._read_body()
+        # 上传识别接口要收 base64（体积约 1.34 倍），单独放宽请求体上限
+        limit = int(MAX_UPLOAD_BYTES * 1.4) + 4096 if path == "/api/inspect_upload" else MAX_BODY
+        body = self._read_body(limit=limit)
         if body is None:
-            self._json({"ok": False, "error": "请求体过大（上限 1MB）"}, 413)
+            self._json({"ok": False, "error": f"请求体过大（上限 {limit // 1024}KB）"}, 413)
             return
 
         if path == "/api/analyze":
@@ -349,9 +373,42 @@ class Handler(BaseHTTPRequestHandler):
                 "chat": chat,
                 "notes": notes,
             })
+        elif path == "/api/inspect_upload":
+            # 上传内容识别：区分"聊天记录文本"与"QQ 加密备份"，避免把二进制读成乱码
+            b64 = str(body.get("data_b64", "") or "")
+            filename = str(body.get("filename", "") or "")
+            if not b64:
+                self._json({"ok": False, "kind": "empty",
+                            "error": "没有收到文件内容。", "guide": []}, 400)
+                return
+            try:
+                import base64
+                data = base64.b64decode(b64)
+            except Exception:
+                self._json({"ok": False, "kind": "binary",
+                            "error": "文件内容解码失败。", "guide": []}, 400)
+                return
+            if len(data) > MAX_UPLOAD_BYTES:
+                self._json({"ok": False, "kind": "too_large",
+                            "error": f"文件太大（{len(data)//1024}KB），上限 {MAX_UPLOAD_BYTES//1024}KB。",
+                            "guide": ["请分段导出 / 分批粘贴。"]}, 413)
+                return
+            result = inspect_upload(data, filename)
+            if result.get("ok"):
+                text = result.pop("text", "")
+                result["text"] = text
+            self._json(result)
         elif path == "/api/export":
             fmt = urllib.parse.parse_qs(urllib.parse.urlparse(self.path).query).get("format", ["json"])[0]
             tasks = body.get("tasks", []) or []
+            sched = body.get("schedule") or None
+            if fmt == "schedule_csv":
+                # 只导出"结构化时间表"
+                data = sched or {"days": [], "buckets": []}
+                self._send(exporter.schedule_to_csv(data),
+                           content_type="text/csv; charset=utf-8",
+                           extra_headers={"Content-Disposition": 'attachment; filename="deadline-schedule.csv"'})
+                return
             if fmt == "csv":
                 # 带 UTF-8 BOM，Excel 双击不乱码；附下载文件名
                 self._send(exporter.to_csv_bytes(tasks),
@@ -363,7 +420,7 @@ class Handler(BaseHTTPRequestHandler):
                                 "error": "未安装 openpyxl，无法导出 Excel。请运行 pip install openpyxl，或改用 CSV。"},
                                501)
                 else:
-                    self._send(exporter.to_xlsx(tasks),
+                    self._send(exporter.to_xlsx(tasks, sched),
                                content_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
                                extra_headers={"Content-Disposition": 'attachment; filename="deadline-sentinel.xlsx"'})
             elif fmt == "json":

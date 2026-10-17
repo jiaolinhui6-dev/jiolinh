@@ -94,6 +94,28 @@ PAGE_HTML = r"""<!DOCTYPE html>
          border-radius:9px;font-size:13.5px;opacity:0;transform:translateY(8px);transition:.25s;pointer-events:none}
   .toast.show{opacity:1;transform:none}
   .legend{font-size:12px;color:var(--muted);margin-top:8px}
+  .notice ol.guide{margin:6px 0 0 18px;padding:0;line-height:1.7}
+  .sched{margin-bottom:6px}
+  .sched .empty{text-align:center;color:var(--muted);padding:18px 8px;font-size:13px}
+  .weekgrid{display:grid;grid-template-columns:repeat(7,1fr);gap:6px;margin-bottom:12px}
+  .wday{border:1px solid var(--line);border-radius:9px;background:#fff;padding:8px 7px;min-height:88px}
+  .wday.today{border-color:var(--brand);box-shadow:0 0 0 2px rgba(37,99,235,.12)}
+  .wday.weekend{background:#fafafa}
+  .wday .wd-top{font-size:11.5px;color:var(--muted);font-weight:700;display:flex;justify-content:space-between}
+  .wday.today .wd-top{color:var(--brand)}
+  .wday .wd-n{font-size:11px;color:#94a3b8}
+  .wday .wd-item{margin-top:5px;font-size:11.5px;line-height:1.35;border-left:3px solid var(--brand);
+        padding:2px 0 2px 5px;color:var(--ink);word-break:break-all}
+  .wday .wd-item.over{border-left-color:var(--red)}
+  .wday .wd-item .t{display:block;color:#94a3b8;font-size:10.5px}
+  .wday .wd-none{font-size:11px;color:#cbd5e1;margin-top:6px;text-align:center}
+  .bkl{display:flex;gap:6px;flex-wrap:wrap}
+  .bk{border:1px solid var(--line);border-radius:999px;background:#fff;padding:5px 11px;font-size:12px}
+  .bk b{color:var(--brand);margin-left:4px}
+  .bk.over b{color:var(--red)}
+  .sched-foot{font-size:12.5px;color:var(--muted);margin:10px 0 4px}
+  @media(max-width:760px){.weekgrid{grid-template-columns:repeat(2,1fr)}}
+  .notice ol.guide li{margin:0}
   .smart{background:#f0fdf4;border:1px solid #bbf7d0;border-radius:10px;padding:12px 14px;margin-bottom:8px}
   .smart-title{font-weight:700;font-size:13.5px;color:#166534;margin-bottom:4px}
   .smart textarea{height:70px;background:#fff}
@@ -166,12 +188,15 @@ PAGE_HTML = r"""<!DOCTYPE html>
         <span class="modebar" id="modeBar"></span>
       </div>
       <p class="hint" id="aiHint"></p>
+      <div id="uploadBox"></div>
       <div id="problemBox"></div>
     </div>
 
     <!-- 右：结果 -->
     <div class="panel">
-      <h2>② 待办清单</h2>
+      <h2>② 结构化时间表</h2>
+      <div id="scheduleBox" class="sched"></div>
+      <h2 style="margin-top:22px">③ 待办清单（按紧急度）</h2>
       <div id="summary" class="cards"></div>
       <div id="notices"></div>
       <div id="traceBox"></div>
@@ -191,6 +216,7 @@ PAGE_HTML = r"""<!DOCTYPE html>
           <option value="conf">按待确认优先</option>
         </select>
         <button class="primary" id="btnExportXlsx">导出 Excel（推荐）</button>
+        <button id="btnExportSchedCsv">导出时间表 CSV</button>
         <button id="btnExportCsv">导出 CSV</button>
         <button id="btnExportJson">导出 JSON</button>
       </div>
@@ -251,7 +277,7 @@ PAGE_HTML = r"""<!DOCTYPE html>
 <div class="toast" id="toast"></div>
 
 <script>
-const S = { tasks: [], summary: {}, problems: [], ai: {}, now: null };
+const S = { tasks: [], summary: {}, schedule: null, problems: [], ai: {}, now: null };
 const $ = id => document.getElementById(id);
 
 function toast(msg){
@@ -278,7 +304,34 @@ function originBadge(o){ const [t,c]=ORIGIN[o]||ORIGIN.rule; return '<span class
 
 function render(){
   globalsNow = S.now ? new Date(S.now).getTime() : Date.now();
-  renderSummary(); renderChatFilter(); renderList();
+  renderSchedule(); renderSummary(); renderChatFilter(); renderList();
+}
+function renderSchedule(){
+  const sc = S.schedule;
+  if(!sc || !sc.days){ $('scheduleBox').innerHTML = '<div class="empty">分析后这里会显示本周时间表。</div>'; return; }
+  const days = sc.days.map(d=>{
+    const cls = 'wday'+(d.is_today?' today':'')+(d.is_weekend?' weekend':'');
+    const items = d.items.length
+      ? d.items.map(t=>{
+          const over = t.status==='已过期';
+          const hhmm = t.due ? t.due.slice(11,16) : '';
+          const name = (t.topic||t.text||'').slice(0,26);
+          return '<div class="wd-item'+(over?' over':'')+'" title="'+esc(t.chat+' | '+(t.text||''))+'">'+
+            '<span class="t">'+esc(hhmm)+'</span>'+esc(name)+'</div>';
+        }).join('')
+      : '<div class="wd-none">—</div>';
+    return '<div class="'+cls+'"><div class="wd-top"><span>'+esc(d.weekday)+'</span>'+
+      '<span class="wd-n">'+esc(d.date.slice(5))+'</span></div>'+items+'</div>';
+  }).join('');
+  const bks = (sc.buckets||[]).map(b=>{
+    const over = b.key==='已过期';
+    return '<span class="bk'+(over?' over':'')+'">'+esc(b.label)+'<b>'+b.count+'</b></span>';
+  }).join('');
+  $('scheduleBox').innerHTML =
+    '<div class="weekgrid">'+days+'</div>'+
+    '<div class="bkl">'+bks+'</div>'+
+    '<div class="sched-foot">本周（'+esc(sc.week_start)+' ~ '+esc(sc.week_end)+'）共 <b>'+sc.week_total+
+    '</b> 项待办；另有 '+sc.unscheduled+' 项时间未知（见下方清单，可手动补时间）。</div>';
 }
 function renderSummary(){
   const s = S.summary || {};
@@ -427,7 +480,7 @@ async function analyze(){
     const data = await r.json();
     if(!data.ok){ $('notices').innerHTML='<div class="notice err">分析失败：'+esc(data.error||'未知错误')+'</div>'; return; }
     S.tasks = data.tasks; S.summary = data.summary; S.problems = data.problems;
-    S.ai = data.ai||{}; S.now = data.now; S.trace = data.trace||[]; S.uncertain = data.uncertain||{};
+    S.ai = data.ai||{}; S.now = data.now; S.trace = data.trace||[]; S.uncertain = data.uncertain||{}; S.schedule = data.schedule||null;
     renderProblems(); renderNotices(); renderTrace(); renderUncertain(); render();
   }catch(e){
     $('notices').innerHTML='<div class="notice err">请求失败：'+esc(e.message||e)+'</div>';
@@ -467,15 +520,48 @@ $('btnLoadDemo').onclick = async ()=>{
   const r = await fetch('/api/demo'); const d = await r.json();
   $('input').value = d.text; toast('已载入示例');
 };
-$('btnClear').onclick = ()=>{ $('input').value=''; S.tasks=[]; S.summary={}; S.problems=[]; render(); $('problemBox').innerHTML=''; $('notices').innerHTML=''; toast('已清空'); };
+$('btnClear').onclick = ()=>{ $('input').value=''; S.tasks=[]; S.summary={}; S.schedule=null; S.problems=[]; render(); $('problemBox').innerHTML=''; $('notices').innerHTML=''; toast('已清空'); };
 $('btnUpload').onclick = ()=>$('file').click();
-$('file').onchange = e=>{
+$('file').onchange = async e=>{
   const f = e.target.files[0]; if(!f) return;
-  if(f.size > 512*1024){ toast('文件过大（限 512KB）'); return; }
-  if(!/\.(txt|bak|log|text)$/i.test(f.name)){ toast('只支持 .txt / .bak 等文本文件'); return; }
-  const rd = new FileReader(); rd.onload = ()=>{ $('input').value = rd.result; toast('已读取：'+f.name); };
-  rd.readAsText(f, 'utf-8');
+  e.target.value='';  // 允许重复选同一个文件
+  if(f.size > 4*1024*1024){ toast('文件过大（限 4MB）'); return; }
+  const ext = (f.name.match(/\.[^.]+$/)||[''])[0].toLowerCase();
+  const known = ['.txt','.bak','.log','.text','.md','.csv'];
+  if(ext && !known.includes(ext)){ toast('只支持文本类文件（.txt / .bak / .log 等）'); return; }
+  let b64;
+  try{ b64 = await fileToBase64(f); }
+  catch(err){ toast('读取文件失败：'+(err.message||err)); return; }
+  $('uploadBox').innerHTML = '<div class="notice info">正在识别「'+esc(f.name)+'」…</div>';
+  try{
+    const r = await fetch('/api/inspect_upload', {method:'POST', headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({filename: f.name, data_b64: b64})});
+    const d = await r.json();
+    if(d.ok){
+      $('input').value = d.text;
+      $('uploadBox').innerHTML = '<div class="notice info">已读取「'+esc(f.name)+'」（'+esc(d.encoding||'')+'）。点「开始分析」查看结果。</div>';
+      toast('已读取：'+f.name);
+    }else{
+      $('uploadBox').innerHTML = uploadGuideHTML(f.name, d);
+      toast('这个文件读不出聊天记录');
+    }
+  }catch(err){
+    $('uploadBox').innerHTML = '<div class="notice err">识别失败：'+esc(err.message||err)+'</div>';
+  }
 };
+function fileToBase64(file){
+  return new Promise((resolve,reject)=>{
+    const rd = new FileReader();
+    rd.onload = ()=>{ const s=String(rd.result); resolve(s.slice(s.indexOf(',')+1)); };
+    rd.onerror = ()=>reject(new Error('无法读取文件'));
+    rd.readAsDataURL(file);
+  });
+}
+function uploadGuideHTML(name, d){
+  const g = (d.guide||[]).map(x=>'<li>'+esc(x)+'</li>').join('');
+  return '<div class="notice warn"><b>'+esc(d.error||'无法识别这个文件')+'</b>'+
+    (g?'<ol class="guide">'+g+'</ol>':'')+'</div>';
+}
 ['q','fStatus','fChat','sortBy'].forEach(id=>{ $(id).addEventListener('input', renderList); $(id).addEventListener('change', renderList); });
 
 function downloadBlob(name, blob){
@@ -488,13 +574,14 @@ const MIME = {
   json: 'application/json',
 };
 $('btnExportXlsx').onclick = ()=>fetchExport('xlsx');
+$('btnExportSchedCsv').onclick = ()=>fetchExport('schedule_csv');
 $('btnExportCsv').onclick = ()=>fetchExport('csv');
 $('btnExportJson').onclick = ()=>fetchExport('json');
 async function fetchExport(kind){
   if(!S.tasks || !S.tasks.length){ toast('还没有可导出的任务'); return; }
   try{
     const r = await fetch('/api/export?format='+kind, {method:'POST', headers:{'Content-Type':'application/json'},
-      body: JSON.stringify({tasks: S.tasks})});
+      body: JSON.stringify({tasks: S.tasks, schedule: S.schedule})});
     if(!r.ok){
       let msg = '导出失败';
       try{ const e = await r.json(); if(e && e.error) msg = e.error; }catch(_){}
@@ -502,8 +589,10 @@ async function fetchExport(kind){
     }
     // 用 blob 拿二进制，避免把 XLSX 当文本破坏内容
     const blob = await r.blob();
-    downloadBlob('deadline-sentinel.'+kind, new Blob([blob], {type: MIME[kind]||'application/octet-stream'}));
-    toast('已导出 '+kind.toUpperCase());
+    const name = (kind==='schedule_csv') ? 'deadline-schedule.csv' : ('deadline-sentinel.'+kind);
+    const mime = (kind==='schedule_csv') ? 'text/csv' : (MIME[kind]||'application/octet-stream');
+    downloadBlob(name, new Blob([blob], {type: mime}));
+    toast(kind==='schedule_csv' ? '已导出时间表 CSV' : ('已导出 '+kind.toUpperCase()));
   }catch(e){ toast('导出失败：'+(e.message||e)); }
 }
 

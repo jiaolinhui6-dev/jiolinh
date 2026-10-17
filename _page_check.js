@@ -1,5 +1,4 @@
-
-const S = { tasks: [], summary: {}, problems: [], ai: {}, now: null };
+const S = { tasks: [], summary: {}, schedule: null, problems: [], ai: {}, now: null };
 const $ = id => document.getElementById(id);
 
 function toast(msg){
@@ -26,7 +25,34 @@ function originBadge(o){ const [t,c]=ORIGIN[o]||ORIGIN.rule; return '<span class
 
 function render(){
   globalsNow = S.now ? new Date(S.now).getTime() : Date.now();
-  renderSummary(); renderChatFilter(); renderList();
+  renderSchedule(); renderSummary(); renderChatFilter(); renderList();
+}
+function renderSchedule(){
+  const sc = S.schedule;
+  if(!sc || !sc.days){ $('scheduleBox').innerHTML = '<div class="empty">分析后这里会显示本周时间表。</div>'; return; }
+  const days = sc.days.map(d=>{
+    const cls = 'wday'+(d.is_today?' today':'')+(d.is_weekend?' weekend':'');
+    const items = d.items.length
+      ? d.items.map(t=>{
+          const over = t.status==='已过期';
+          const hhmm = t.due ? t.due.slice(11,16) : '';
+          const name = (t.topic||t.text||'').slice(0,26);
+          return '<div class="wd-item'+(over?' over':'')+'" title="'+esc(t.chat+' | '+(t.text||''))+'">'+
+            '<span class="t">'+esc(hhmm)+'</span>'+esc(name)+'</div>';
+        }).join('')
+      : '<div class="wd-none">—</div>';
+    return '<div class="'+cls+'"><div class="wd-top"><span>'+esc(d.weekday)+'</span>'+
+      '<span class="wd-n">'+esc(d.date.slice(5))+'</span></div>'+items+'</div>';
+  }).join('');
+  const bks = (sc.buckets||[]).map(b=>{
+    const over = b.key==='已过期';
+    return '<span class="bk'+(over?' over':'')+'">'+esc(b.label)+'<b>'+b.count+'</b></span>';
+  }).join('');
+  $('scheduleBox').innerHTML =
+    '<div class="weekgrid">'+days+'</div>'+
+    '<div class="bkl">'+bks+'</div>'+
+    '<div class="sched-foot">本周（'+esc(sc.week_start)+' ~ '+esc(sc.week_end)+'）共 <b>'+sc.week_total+
+    '</b> 项待办；另有 '+sc.unscheduled+' 项时间未知（见下方清单，可手动补时间）。</div>';
 }
 function renderSummary(){
   const s = S.summary || {};
@@ -148,7 +174,21 @@ function updateModeBar(){
   const map = {offline:'离线模式（仅规则）', demo:'项目演示 API', custom:'我的 API'};
   $('modeBar').textContent = '当前：' + (map[m]||m);
 }
-document.querySelectorAll('input[name=aimode]').forEach(el=>el.addEventListener('change', updateModeBar));
+document.querySelectorAll('input[name=aimode]').forEach(el=>el.addEventListener('change', ()=>onMainModeChange(el.value)));
+// 主面板选「我的 API / 演示 API」时，直接打开设置弹窗并展开对应输入框，
+// 避免用户误以为"点了没反应、无处可填"。
+function onMainModeChange(m){
+  updateModeBar();
+  if(m==='custom' || m==='demo') openSettings(m);
+}
+function openSettings(m){
+  const el = document.querySelector('input[name=smode][value="'+m+'"]');
+  if(el) el.checked = true;
+  $('customPane').style.display = (m==='custom')?'block':'none';
+  const d = $('settingsDlg');
+  if(!d.open) d.showModal();
+  loadCfg().then(()=>renderCfg());
+}
 
 async function analyze(){
   const text = $('input').value;
@@ -161,7 +201,7 @@ async function analyze(){
     const data = await r.json();
     if(!data.ok){ $('notices').innerHTML='<div class="notice err">分析失败：'+esc(data.error||'未知错误')+'</div>'; return; }
     S.tasks = data.tasks; S.summary = data.summary; S.problems = data.problems;
-    S.ai = data.ai||{}; S.now = data.now; S.trace = data.trace||[]; S.uncertain = data.uncertain||{};
+    S.ai = data.ai||{}; S.now = data.now; S.trace = data.trace||[]; S.uncertain = data.uncertain||{}; S.schedule = data.schedule||null;
     renderProblems(); renderNotices(); renderTrace(); renderUncertain(); render();
   }catch(e){
     $('notices').innerHTML='<div class="notice err">请求失败：'+esc(e.message||e)+'</div>';
@@ -201,15 +241,48 @@ $('btnLoadDemo').onclick = async ()=>{
   const r = await fetch('/api/demo'); const d = await r.json();
   $('input').value = d.text; toast('已载入示例');
 };
-$('btnClear').onclick = ()=>{ $('input').value=''; S.tasks=[]; S.summary={}; S.problems=[]; render(); $('problemBox').innerHTML=''; $('notices').innerHTML=''; toast('已清空'); };
+$('btnClear').onclick = ()=>{ $('input').value=''; S.tasks=[]; S.summary={}; S.schedule=null; S.problems=[]; render(); $('problemBox').innerHTML=''; $('notices').innerHTML=''; toast('已清空'); };
 $('btnUpload').onclick = ()=>$('file').click();
-$('file').onchange = e=>{
+$('file').onchange = async e=>{
   const f = e.target.files[0]; if(!f) return;
-  if(f.size > 512*1024){ toast('文件过大（限 512KB）'); return; }
-  if(!/\.(txt|bak|log|text)$/i.test(f.name)){ toast('只支持 .txt / .bak 等文本文件'); return; }
-  const rd = new FileReader(); rd.onload = ()=>{ $('input').value = rd.result; toast('已读取：'+f.name); };
-  rd.readAsText(f, 'utf-8');
+  e.target.value='';  // 允许重复选同一个文件
+  if(f.size > 4*1024*1024){ toast('文件过大（限 4MB）'); return; }
+  const ext = (f.name.match(/\.[^.]+$/)||[''])[0].toLowerCase();
+  const known = ['.txt','.bak','.log','.text','.md','.csv'];
+  if(ext && !known.includes(ext)){ toast('只支持文本类文件（.txt / .bak / .log 等）'); return; }
+  let b64;
+  try{ b64 = await fileToBase64(f); }
+  catch(err){ toast('读取文件失败：'+(err.message||err)); return; }
+  $('uploadBox').innerHTML = '<div class="notice info">正在识别「'+esc(f.name)+'」…</div>';
+  try{
+    const r = await fetch('/api/inspect_upload', {method:'POST', headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({filename: f.name, data_b64: b64})});
+    const d = await r.json();
+    if(d.ok){
+      $('input').value = d.text;
+      $('uploadBox').innerHTML = '<div class="notice info">已读取「'+esc(f.name)+'」（'+esc(d.encoding||'')+'）。点「开始分析」查看结果。</div>';
+      toast('已读取：'+f.name);
+    }else{
+      $('uploadBox').innerHTML = uploadGuideHTML(f.name, d);
+      toast('这个文件读不出聊天记录');
+    }
+  }catch(err){
+    $('uploadBox').innerHTML = '<div class="notice err">识别失败：'+esc(err.message||err)+'</div>';
+  }
 };
+function fileToBase64(file){
+  return new Promise((resolve,reject)=>{
+    const rd = new FileReader();
+    rd.onload = ()=>{ const s=String(rd.result); resolve(s.slice(s.indexOf(',')+1)); };
+    rd.onerror = ()=>reject(new Error('无法读取文件'));
+    rd.readAsDataURL(file);
+  });
+}
+function uploadGuideHTML(name, d){
+  const g = (d.guide||[]).map(x=>'<li>'+esc(x)+'</li>').join('');
+  return '<div class="notice warn"><b>'+esc(d.error||'无法识别这个文件')+'</b>'+
+    (g?'<ol class="guide">'+g+'</ol>':'')+'</div>';
+}
 ['q','fStatus','fChat','sortBy'].forEach(id=>{ $(id).addEventListener('input', renderList); $(id).addEventListener('change', renderList); });
 
 function downloadBlob(name, blob){
@@ -222,13 +295,14 @@ const MIME = {
   json: 'application/json',
 };
 $('btnExportXlsx').onclick = ()=>fetchExport('xlsx');
+$('btnExportSchedCsv').onclick = ()=>fetchExport('schedule_csv');
 $('btnExportCsv').onclick = ()=>fetchExport('csv');
 $('btnExportJson').onclick = ()=>fetchExport('json');
 async function fetchExport(kind){
   if(!S.tasks || !S.tasks.length){ toast('还没有可导出的任务'); return; }
   try{
     const r = await fetch('/api/export?format='+kind, {method:'POST', headers:{'Content-Type':'application/json'},
-      body: JSON.stringify({tasks: S.tasks})});
+      body: JSON.stringify({tasks: S.tasks, schedule: S.schedule})});
     if(!r.ok){
       let msg = '导出失败';
       try{ const e = await r.json(); if(e && e.error) msg = e.error; }catch(_){}
@@ -236,8 +310,10 @@ async function fetchExport(kind){
     }
     // 用 blob 拿二进制，避免把 XLSX 当文本破坏内容
     const blob = await r.blob();
-    downloadBlob('deadline-sentinel.'+kind, new Blob([blob], {type: MIME[kind]||'application/octet-stream'}));
-    toast('已导出 '+kind.toUpperCase());
+    const name = (kind==='schedule_csv') ? 'deadline-schedule.csv' : ('deadline-sentinel.'+kind);
+    const mime = (kind==='schedule_csv') ? 'text/csv' : (MIME[kind]||'application/octet-stream');
+    downloadBlob(name, new Blob([blob], {type: mime}));
+    toast(kind==='schedule_csv' ? '已导出时间表 CSV' : ('已导出 '+kind.toUpperCase()));
   }catch(e){ toast('导出失败：'+(e.message||e)); }
 }
 
@@ -283,7 +359,10 @@ function renderCfg(){
   if(lc.api_key) parts.push('我的 API 已配置（仅本浏览器）：'+esc(maskKey(lc.api_key)));
   $('aiHint').textContent = parts.length ? parts.join('｜') : '未配置任何 API；离线模式（规则）可正常使用。';
 }
-$('btnSettings').onclick = async ()=>{ await loadCfg(); renderCfg(); $('settingsDlg').showModal(); };
+$('btnSettings').onclick = async ()=>{
+  const m = currentMode();
+  openSettings(m==='demo' || m==='custom' ? m : 'offline');
+};
 $('cfgClose').onclick = ()=>$('settingsDlg').close();
 document.querySelectorAll('input[name=smode]').forEach(el=>el.addEventListener('change', ()=>{
   const m = document.querySelector('input[name=smode]:checked').value;

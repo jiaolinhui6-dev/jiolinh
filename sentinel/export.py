@@ -118,10 +118,11 @@ def to_json(tasks: list, *, indent: int | None = 2) -> str:
     return json.dumps(payload, ensure_ascii=False, indent=indent)
 
 
-def to_xlsx(tasks: list) -> bytes:
+def to_xlsx(tasks: list, schedule: dict | None = None) -> bytes:
     """用 openpyxl 生成 XLSX 字节流。
 
     特性：表头加粗着色、首行冻结、自动筛选、按内容设置列宽、长文本自动换行。
+    若传入 schedule，会额外生成一张「本周时间表」工作表。
     """
     if not HAS_OPENPYXL:
         raise ExportUnavailable("未安装 openpyxl，无法导出 XLSX。请运行：pip install openpyxl")
@@ -156,11 +157,87 @@ def to_xlsx(tasks: list) -> bytes:
     ws.freeze_panes = "A2"
     ws.auto_filter.ref = f"A1:{get_column_letter(len(FIELDS))}{max(ws.max_row, 1)}"
 
+    # 可选：追加"本周时间表"工作表
+    if schedule:
+        ws2 = wb.create_sheet("本周时间表")
+        ws2.append(SCHEDULE_FIELDS)
+        for col_idx, _name in enumerate(SCHEDULE_FIELDS, 1):
+            cell = ws2.cell(row=1, column=col_idx)
+            cell.fill = header_fill
+            cell.font = header_font
+            cell.alignment = Alignment(horizontal="center", vertical="center")
+        for r in schedule_rows(schedule):
+            ws2.append([r[name] for name in SCHEDULE_FIELDS])
+        widths = {"日期": 12, "星期": 8, "时间": 8, "状态": 10, "任务": 24,
+                  "课程群": 18, "剩余时间": 16, "原始消息": 52}
+        for col_idx, name in enumerate(SCHEDULE_FIELDS, 1):
+            ws2.column_dimensions[get_column_letter(col_idx)].width = widths.get(name, 16)
+        ws2.freeze_panes = "A2"
+
     out = io.BytesIO()
     wb.save(out)
     return out.getvalue()
 
 
-def to_xlsx_stream(tasks: list):
+# 时间表导出的列
+SCHEDULE_FIELDS = ["日期", "星期", "时间", "状态", "任务", "课程群", "剩余时间", "原始消息"]
+
+
+def schedule_rows(schedule: dict) -> list:
+    """把 build_schedule 的结果摊平成"一行一个任务"的表，便于导出。
+
+    只导出有明确时间或落在本周分区的条目，顺序按周一到周日 + 各时间分区。
+    """
+    rows = []
+    seen = set()
+
+    def push(day_label, day_date, task):
+        key = (task.get("id"), task.get("due"))
+        if key in seen:
+            return
+        seen.add(key)
+        due = task.get("due")
+        # due 可能是 datetime（命令行内部）或字符串（网页回传），两种都要兼容
+        if isinstance(due, datetime):
+            date_str, time_str = due.strftime("%Y-%m-%d"), due.strftime("%H:%M")
+        elif due:
+            due_s = str(due)
+            date_str = due_s[:10]
+            time_str = due_s[11:16] if len(due_s) >= 16 else ""
+        else:
+            date_str = time_str = ""
+        rows.append({
+            "日期": date_str or day_date or "",
+            "星期": day_label or "",
+            "时间": time_str,
+            "状态": task.get("status", ""),
+            "任务": task.get("topic") or (task.get("text") or "")[:20],
+            "课程群": task.get("chat", ""),
+            "剩余时间": task.get("remaining", ""),
+            "原始消息": task.get("text", ""),
+        })
+
+    for d in (schedule or {}).get("days", []):
+        for t in d.get("items", []):
+            push(d.get("weekday", ""), d.get("date", ""), t)
+
+    for b in (schedule or {}).get("buckets", []):
+        if b.get("key") in ("已过期", "下周", "更远", "时间未知"):
+            for t in b.get("items", []):
+                push(b.get("key", ""), "", t)
+    return rows
+
+
+def schedule_to_csv(schedule: dict) -> bytes:
+    """时间表导出为带 BOM 的 CSV 字节流。"""
+    buf = io.StringIO()
+    writer = csv.DictWriter(buf, fieldnames=SCHEDULE_FIELDS)
+    writer.writeheader()
+    for r in schedule_rows(schedule):
+        writer.writerow(r)
+    return (BOM + buf.getvalue()).encode("utf-8")
+
+
+def to_xlsx_stream(tasks: list, schedule: dict | None = None):
     """返回可直接读取的字节流（BytesIO），方便测试与 HTTP 下载。"""
-    return io.BytesIO(to_xlsx(tasks))
+    return io.BytesIO(to_xlsx(tasks, schedule))

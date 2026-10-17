@@ -440,6 +440,149 @@ class TestSmartPaste(unittest.TestCase):
         self.assertEqual(tasks[0]["due"].day, 25)
 
 
+class TestUploadInspect(unittest.TestCase):
+    """上传文件识别：文本 / QQ 加密备份 / 二进制。"""
+
+    def test_plain_text_ok(self):
+        from sentinel.upload_inspect import inspect_upload
+        data = "2026-10-14 09:12 | 助教-李 | 数据结构 | 实验三报告下周日交\n".encode("utf-8")
+        r = inspect_upload(data, "chat.txt")
+        self.assertTrue(r["ok"])
+        self.assertEqual(r["kind"], "text")
+        self.assertIn("助教-李", r["text"])
+
+    def test_gbk_text_ok(self):
+        from sentinel.upload_inspect import inspect_upload
+        data = "2026-10-14 09:12 | 助教-李 | 数据结构 | 实验三报告下周日交\n".encode("gb18030")
+        r = inspect_upload(data, "chat.txt")
+        self.assertTrue(r["ok"])
+        self.assertIn("助教-李", r["text"])
+
+    def test_qq_backup_identified_with_guide(self):
+        import io as _io, zipfile
+        from sentinel.upload_inspect import inspect_upload
+        buf = _io.BytesIO()
+        with zipfile.ZipFile(buf, "w") as z:
+            z.writestr("db/1B73A02D1601D5ECCC12125093482ED4", b"SQLite header 3\x00\x04\x00 \x00")
+        r = inspect_upload(buf.getvalue(), "2731045816的1个聊天记录.bak")
+        self.assertFalse(r["ok"])
+        self.assertEqual(r["kind"], "qq_backup")
+        self.assertTrue(r["guide"])           # 必须给出操作建议
+        self.assertIn("加密", r["error"])
+
+    def test_encrypted_db_identified(self):
+        from sentinel.upload_inspect import inspect_upload
+        data = b"SQLite header 3\x00\x04\x00 \x00" + b"\x00" * 40 + b"MSG0" + b"\x00" * 200
+        r = inspect_upload(data, "nt_msg.db")
+        self.assertFalse(r["ok"])
+        self.assertEqual(r["kind"], "encrypted_db")
+
+    def test_plain_zip_told_to_unzip(self):
+        import io as _io, zipfile
+        from sentinel.upload_inspect import inspect_upload
+        buf = _io.BytesIO()
+        with zipfile.ZipFile(buf, "w") as z:
+            z.writestr("a.txt", "hello")
+        r = inspect_upload(buf.getvalue(), "records.zip")
+        self.assertFalse(r["ok"])
+        self.assertEqual(r["kind"], "zip")
+
+    def test_binary_rejected(self):
+        from sentinel.upload_inspect import inspect_upload
+        data = bytes(range(256)) * 8
+        r = inspect_upload(data, "weird.bin")
+        self.assertFalse(r["ok"])
+        self.assertIn(r["kind"], ("binary", "zip"))
+
+    def test_empty_file(self):
+        from sentinel.upload_inspect import inspect_upload
+        r = inspect_upload(b"", "empty.txt")
+        self.assertFalse(r["ok"])
+        self.assertEqual(r["kind"], "empty")
+
+
+class TestSchedule(unittest.TestCase):
+    """结构化时间表：按周一到周日归组 + 分区。"""
+
+    NOW = datetime(2026, 10, 17, 10, 0)   # 2026-10-17 是周六
+
+    def _tasks(self):
+        from sentinel.read_chat import parse_lines
+        from sentinel.tasks import build_tasks
+        text = "\n".join([
+            "2026-10-14 09:00 | A | 群 | 实验报告本周日晚上12点前交",
+            "2026-10-16 09:00 | A | 群 | 第二次作业下周三交",
+            "2026-10-10 09:00 | A | 群 | 第一次作业10月15日24点前交",
+        ])
+        msgs, _ = parse_lines(text)
+        tasks = build_tasks(msgs, now=self.NOW)
+        from sentinel.ddl import status_of
+        for t in tasks:
+            t["status"] = "已作废" if t["superseded"] else status_of(t["due"], self.NOW)
+        return tasks
+
+    def test_days_are_monday_to_sunday(self):
+        from sentinel.schedule import build_schedule
+        sc = build_schedule(self._tasks(), now=self.NOW)
+        self.assertEqual(len(sc["days"]), 7)
+        self.assertEqual(sc["days"][0]["weekday"], "周一")
+        self.assertEqual(sc["days"][6]["weekday"], "周日")
+        self.assertEqual(sc["week_start"], "2026-10-12")
+        self.assertEqual(sc["week_end"], "2026-10-18")
+
+    def test_today_flagged(self):
+        from sentinel.schedule import build_schedule
+        sc = build_schedule(self._tasks(), now=self.NOW)
+        todays = [d for d in sc["days"] if d["is_today"]]
+        self.assertEqual(len(todays), 1)
+        self.assertEqual(todays[0]["weekday"], "周六")
+
+    def test_sunday_task_lands_on_sunday(self):
+        from sentinel.schedule import build_schedule
+        sc = build_schedule(self._tasks(), now=self.NOW)
+        sunday = sc["days"][6]
+        self.assertTrue(any("实验" in (t.get("text") or "") for t in sunday["items"]))
+
+    def test_overdue_this_week_shown_in_day_column(self):
+        """本周内已过期的任务，也要出现在对应的星期列里。"""
+        from sentinel.schedule import build_schedule
+        tasks = self._tasks()
+        sc = build_schedule(tasks, now=self.NOW)
+        # 10-15(周四) 那条已过期，应落在周四列（而不是被丢进"已过期"分区就不见）
+        thu = sc["days"][3]
+        self.assertEqual(thu["weekday"], "周四")
+        self.assertTrue(any(t["status"] == "已过期" for t in thu["items"]))
+        self.assertGreaterEqual(sc["week_total"], 2)
+
+    def test_buckets_present(self):
+        from sentinel.schedule import build_schedule
+        sc = build_schedule(self._tasks(), now=self.NOW)
+        keys = [b["key"] for b in sc["buckets"]]
+        for k in ("已过期", "今天", "明天", "本周", "下周", "更远", "时间未知"):
+            self.assertIn(k, keys)
+        overdue = [b for b in sc["buckets"] if b["key"] == "已过期"][0]
+        self.assertGreaterEqual(overdue["count"], 1)
+
+    def test_superseded_excluded(self):
+        from sentinel.schedule import build_schedule
+        tasks = self._tasks()
+        for t in tasks:
+            t["superseded"] = True
+        sc = build_schedule(tasks, now=self.NOW)
+        self.assertEqual(sc["week_total"], 0)
+        self.assertEqual(sc["unscheduled"], 0)
+
+    def test_schedule_csv_export(self):
+        from sentinel.schedule import build_schedule
+        from sentinel.export import schedule_to_csv
+        sc = build_schedule(self._tasks(), now=self.NOW)
+        data = schedule_to_csv(sc)
+        self.assertTrue(data.startswith(b"\xef\xbb\xbf"))   # BOM
+        text = data.decode("utf-8-sig")
+        self.assertIn("星期", text.splitlines()[0])
+        self.assertIn("实验", text)
+
+
 class TestQQTranscript(unittest.TestCase):
     """整段 QQ 聊天记录：一次粘贴，自动拆成多条。"""
 
