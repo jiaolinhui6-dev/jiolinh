@@ -204,7 +204,7 @@ $('btnUpload').onclick = ()=>$('file').click();
 $('file').onchange = e=>{
   const f = e.target.files[0]; if(!f) return;
   if(f.size > 512*1024){ toast('文件过大（限 512KB）'); return; }
-  if(!/\.txt$/i.test(f.name)){ toast('只支持 .txt 文件'); return; }
+  if(!/\.(txt|bak|log|text)$/i.test(f.name)){ toast('只支持 .txt / .bak 等文本文件'); return; }
   const rd = new FileReader(); rd.onload = ()=>{ $('input').value = rd.result; toast('已读取：'+f.name); };
   rd.readAsText(f, 'utf-8');
 };

@@ -156,7 +156,7 @@ PAGE_HTML = r"""<!DOCTYPE html>
         <button class="primary" id="btnAnalyze">开始分析</button>
         <button id="btnLoadDemo">载入示例</button>
         <button id="btnUpload">上传 TXT</button>
-        <input type="file" id="file" class="file" accept=".txt,text/plain">
+        <input type="file" id="file" class="file" accept=".txt,.bak,.log,.text,text/plain">
         <button id="btnClear">清空</button>
       </div>
       <div class="row">
@@ -470,7 +470,7 @@ $('btnUpload').onclick = ()=>$('file').click();
 $('file').onchange = e=>{
   const f = e.target.files[0]; if(!f) return;
   if(f.size > 512*1024){ toast('文件过大（限 512KB）'); return; }
-  if(!/\.txt$/i.test(f.name)){ toast('只支持 .txt 文件'); return; }
+  if(!/\.(txt|bak|log|text)$/i.test(f.name)){ toast('只支持 .txt / .bak 等文本文件'); return; }
   const rd = new FileReader(); rd.onload = ()=>{ $('input').value = rd.result; toast('已读取：'+f.name); };
   rd.readAsText(f, 'utf-8');
 };
